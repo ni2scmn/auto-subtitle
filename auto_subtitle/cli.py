@@ -3,6 +3,7 @@ import ffmpeg
 import whisper
 import argparse
 import warnings
+import torch
 import tempfile
 from .utils import filename, str2bool, write_srt
 
@@ -45,7 +46,7 @@ def main():
     elif language != "auto":
         args["language"] = language
         
-    model = whisper.load_model(model_name)
+    model = whisper.load_model(model_name, device = "cuda") if torch.cuda.is_available() else whisper.load_model(model_name)
     audios = get_audio(args.pop("video"))
     subtitles = get_subtitles(
         audios, output_srt or srt_only, output_dir, lambda audio_path: model.transcribe(audio_path, **args)
@@ -55,16 +56,26 @@ def main():
         return
 
     for path, srt_path in subtitles.items():
-        out_path = os.path.join(output_dir, f"{filename(path)}.mp4")
+        out_path = os.path.join(output_dir, f"{filename(path)}.mkv")
 
         print(f"Adding subtitles to {filename(path)}...")
 
-        video = ffmpeg.input(path)
-        audio = video.audio
+        input = ffmpeg.input(path)
+        video = input.video
+        audio = input.audio
+        subs = ffmpeg.input(srt_path)
 
-        ffmpeg.concat(
-            video.filter('subtitles', srt_path, force_style="OutlineColour=&H40000000,BorderStyle=3"), audio, v=1, a=1
-        ).output(out_path).run(quiet=True, overwrite_output=True)
+
+        output_ffmpeg = ffmpeg.output(
+            video, audio, subs, out_path,
+            vcodec="copy", acodec="copy",
+            **{'metadata:s:s:0': "language=en", 'metadata:s:s:0': "title=English"}
+        )
+
+        # If the destination file already exists, overwrite it.
+        ffmpeg.run(output_ffmpeg,
+            quiet=True, overwrite_output=True
+        )
 
         print(f"Saved subtitled video to {os.path.abspath(out_path)}.")
 
